@@ -4,6 +4,7 @@
 # Imports
 from os import listdir
 import os
+from cv2 import CV_32FC3
 from skimage import io
 from PIL import Image
 from PIL.ExifTags import TAGS
@@ -13,6 +14,7 @@ import numpy as np
 from typing import overload
 import skimage as sk
 import streamlit as st
+import cv2 
 
 # Parent Class
 class Photo():
@@ -80,6 +82,7 @@ class Photo():
         self.__title = title
 
     # Class Methods
+
     def describe(self):
         name = self.fname
         shape = self.shape
@@ -101,15 +104,14 @@ class Photo():
             res_string += f"{tagname:25}: {value}\t"
         return res_string
 
-    def add_to_book(self, book):
-        book[self.__fname] = self
-
-    def is_in_book(self, book):
-        return self.__image in book.value
-
-    def show(self):
-        io.imshow((self.__image).astype(np.uint8))
-        io.show()
+    def show(self, title="", size=10 ,figsize=(5, 5), **kwargs ):
+        fig = plt.figure(figsize=figsize)
+        plt.imshow( self.image.astype(np.uint8) )
+        plt.title(title, size=size)
+        plt.axis("off")
+        if 'save' in kwargs.keys():
+            plt.savefig(kwargs['save'])
+        plt.show()
 
     @staticmethod
     def load(fp, fname):
@@ -121,26 +123,40 @@ class Photo():
         io.imsave(os.path.join(fp, fname), image_array)
 
     @staticmethod
-    def show_array(image_array, title=""):
-        """
-        modified for streamlit application
-        io.title = title
-        io.imshow(image_array.astype(np.uint8))
-        io.show()
-        """
-        st.image(np.asarray(image_array, dtype=np.uint8), 
-            channels="RGB", output_format="PNG", caption=title)
+    def show_array(image, title="", size=10 ,figsize=(5, 5), **kwargs ):
+        fig = plt.figure(figsize=figsize)
+        plt.imshow(  image.astype(np.uint8) )
+        plt.title(title, size=size)
+        plt.axis("off")
+        if 'save' in kwargs.keys():
+            plt.savefig(kwargs['save'])
+        plt.show()
 
     @staticmethod
-    def show_multiple(book):
-        """
-        Shows all Images within the dictionary object.
-        """
-        keys = list(book.keys())
-        plt.subplot(2*(len(keys)//2), 2*(len(keys)//2), len(keys))
-        i = 0
-        for key in keys:
-            plt.subplot(2*(len(keys)//2), len(keys)-(len(keys)//2), 1+i)
-            io.imshow((book[key].image).astype(np.uint8))
-            i += 1
-        io.show()
+    def transform(X, **kwargs):
+        keys, values = kwargs.keys() , kwargs.values()
+        if "rgb2gray" in keys and kwargs["rgb2gray"]:
+            X = np.float32(X)
+            if len(X.shape) == 3:
+                X = cv2.cvtColor(X, cv2.COLOR_RGB2GRAY)
+
+        if "crop" in keys:
+            # select Region of Interest
+            roi = kwargs['crop']
+            roi = roi.strip()
+            roi = roi.replace(" ", "")
+            xrange, yrange = roi.split(",")
+            xl, xu = xrange.split(':')
+            yl, yu = yrange.split(':')
+            xl, xu = int(xl), int(xu)
+            yl, yu = int(yl), int(yu)
+            
+            print("selected ROI: [{}:{} by {}:{}]".format( xl, xu, yl, yu) )
+            if len(X.shape) == 3:
+                X = X[xl:xu, yl:yu, :]
+            else:
+                X = X[xl:xu, yl:yu]
+
+
+        return X
+
