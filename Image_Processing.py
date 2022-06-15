@@ -2,7 +2,6 @@
 __author__ = 'Jasen Babcock'
 
 # Imports
-from tkinter import Image
 import matplotlib
 from matplotlib.animation import PillowWriter
 from skimage import transform
@@ -10,7 +9,7 @@ from PIL.ExifTags import TAGS
 import numpy as np
 from typing import overload
 import scipy as sp
-from cv2 import cv2
+from cv2 import cv2, mean
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 
@@ -168,7 +167,7 @@ class Image_Processing(Photo):
 
 
     @staticmethod
-    def display(X, title="", size=10, figsize=(15,15), fname="save_fig",  color_map='winter',show=True,  **type):
+    def display(X, title="", size=10, figsize=(5,5), fname="save_fig",  color_map='winter',show=True,  **type):
         def check_and_plot(keys, type, X ):
             def animate(fig, fname=fname):
                 # rotate the axes and update
@@ -469,7 +468,7 @@ class Image_Processing(Photo):
         returns a frequency shifted fft kernel
         """
         #kernel = np.pad(psf, (((X.shape[0] - 3)//2, (X.shape[0] - 3)//2 + 1)), pad_with_zeros  )
-        kernel = np.pad(psf, (((X.shape[0] - 3)//2, (X.shape[0] - 3)//2 + 1)), pad_with_zeros  )
+        kernel = np.pad(psf, (((X.shape[0] - psf.shape[0])//2, (X.shape[0] - psf.shape[1])//2 + 1)), pad_with_zeros  )
         freq_kernel = np.fft.fft2( np.fft.ifftshift(kernel) )
         return freq_kernel
 
@@ -506,7 +505,7 @@ class Image_Processing(Photo):
     def confidence_intervals(X, img, alpha, n , **kwargs):
         keys = kwargs.keys()
         gamma = np.zeros(img.shape)
-        var  =  np.zeros(img.shape)
+        sum_x_sq = np.zeros(img.shape)
         if "nlsq" in keys and kwargs["nlsq"]:
             #add noise
             X.noise_img(mean_noise=0, sigma_noise= X.sigma_noise)
@@ -521,14 +520,16 @@ class Image_Processing(Photo):
                 param["Y"]  = img
                 img = Image_Processing.restore(param=param, nlsq=True)
                 gamma += img
-            mean_img =  gamma/(trial)
+                sum_x_sq += img*img
+            mean_img =  gamma/(trial-2)
+            var = np.abs(sum_x_sq/(trial-2) - mean_img*mean_img)
 
+            mean_img = mean_img.reshape(gamma.shape)
             interval = st.norm.interval(alpha=alpha,
-                            loc = mean_img,
-                            scale = st.sem(img) )
-                        
+                                        loc=mean_img,
+                                        scale = np.sqrt(var)
+                                        )            
                     
-
         if "naive" in keys and kwargs["naive"]:
             #add noise
             X.noise_img(mean_noise=0, sigma_noise= X.sigma_noise)
@@ -536,18 +537,25 @@ class Image_Processing(Photo):
             param = {        
                 "sigma_blur" : X.sigma_blur,
                 "ksize": X.kernel_size, 
-                "K": Image_Processing.blur_matrix(X.psf, img.shape )
+                "K": Image_Processing.blur_matrix(X.psf, img.shape ).astype(np.float64)
             }
             for trial in range(n):
                 param["Y"]  = img
                 img = Image_Processing.restore(param=param, naive=True)
                 gamma += img
+                sum_x_sq += img*img
             mean_img =  gamma/(trial)
+            var = np.abs(sum_x_sq/(trial-2) - mean_img*mean_img)
 
             interval = st.norm.interval(alpha=alpha,
-                                loc = mean_img,
-                                scale = st.sem(img) )
-                            
+                                            loc=mean_img,
+                                            scale = np.sqrt(var)
+                                            )   
+            #interval = st.norm.interval(alpha= alpha,
+            #                loc = mean_img,
+            #                scale = st.sem(mean_img,
+            #                nan_policy='omit' ))
+            #                
         return np.array(interval)
 
     @staticmethod
@@ -575,10 +583,12 @@ class Image_Processing(Photo):
                     x = x.reshape(m, n)
 
                 blur = cv2.GaussianBlur(x, ksize=ksize, sigmaX=sigma_b, sigmaY=sigma_b, borderType=cv2.BORDER_CONSTANT)
-                return blur.reshape(m*n*c, ) - res_img.reshape(m*n*c, )
+                return  blur.reshape(m*n*c, ) - res_img.reshape(m*n*c, )
 
             input = img.reshape(m*n*c, )
             res = least_squares(IP_blur, input, bounds=(0.0, 255.0))
+            
+            #res.x =  255*( res.x /np.max(res.x))
 
             if c == 1:
                 return res.x.reshape(m, n)
@@ -589,15 +599,30 @@ class Image_Processing(Photo):
             img = param["Y"]
             k = param["K"]
             vec = img.reshape(img.size)
-            return (np.linalg.inv(k)@vec).reshape(img.shape)
+            y = (np.linalg.inv(k)@vec)
+            y = 255*(np.abs(y)/np.max(y))
+            return y.reshape(img.shape)
 
 
     @staticmethod
     def first_approximation(img, psf,**kwargs):
+        TOL = 0.000001
         keys = kwargs.keys()
         img_f = np.fft.fft2(img)
+        img_f = img_f
         h_f = Image_Processing.freq_kernel(psf, img)
-        img = np.abs(np.fft.ifft2(img_f/h_f) ).astype(dtype=np.float32)
+        #h_f = h_f/np.max(h_f)
+        img =   np.abs(np.fft.ifft2(img_f/h_f) ).astype(dtype=np.float32)
+        #if img_f.shape == h_f.shape:
+        #    for i in range(h_f.shape[0]):
+        #        for j in range(h_f.shape[1]):
+        #            if h_f[i,j] >= TOL:
+        #                img_f[i,j] = img_f[i,j]/h_f[i,j]
+        #            else:
+        #                img_f[i, j] = 255
+        #img = np.abs(np.fft.ifft2(img_f)).astype(dtype=np.float32)
+
+
         A = img
         if "clip" in keys and kwargs["clip"]:
             for i in range(img.shape[0]):
@@ -611,17 +636,19 @@ class Image_Processing(Photo):
         return A
 
     @staticmethod
-    def plot_confidence(img, LI, UI, fname, **kwargs):
+    def plot_confidence(img, LI, UI,XT, fname, **kwargs):
         keys = kwargs.keys()
         BLUE = img.reshape(img.size)
         lb = LI.reshape(LI.size)
         ub = UI.reshape(UI.size)
+        xt = XT.reshape(XT.size)
         df = pd.DataFrame({"lower bound": np.transpose(lb),
                             "BLUE": np.transpose(BLUE),
-                            "Upper bound": np.transpose(ub)},
-                            columns=["lower bound", "BLUE", "Upper bound"])
+                            "Upper bound": np.transpose(ub),
+                            "True Image": np.transpose(xt)},
+                            columns=["lower bound", "BLUE", "Upper bound", "True Image"])
 
-        #df = df.applymap(Image_Processing.clip)
+        df = df.applymap(Image_Processing.clip)
         if "kde" in keys and kwargs["kde"]:
             df.plot(kind="kde", title=f"Reconstruction using {fname} model")
             Photo.show_array(np.hstack([LI, img, UI]), title=f"Reconstruction using {fname} model")
