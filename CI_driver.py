@@ -1,6 +1,7 @@
 __author__ = "Jasen Babcock"
 
 
+from sklearn.cluster import k_means
 from Photo import Photo as P
 from Image_Processing import Image_Processing as ip
 import os
@@ -35,7 +36,7 @@ def set_image():
     }
 
     paramaters = { 
-        "PSF_Size": (151 , 151 ),
+        "PSF_Size": (3 , 3),
         "NS_lvl": 1.10, 
         "BS_lvl": 10*1.10
         } 
@@ -57,14 +58,14 @@ def set_image():
         return ROI
 
     shape = X.shape
-    ROI = f"{240 }:{ 1040},{560 }:{1360}"
-    print(ROI)
+    #ROI = f"{240 }:{ 1040},{560 }:{1360}"
+    #print(ROI)
 
 
 
-    X = P.transform(X, crop=ROI, rgb2gray=True   )
+    X = P.transform(X, rgb2gray=True   )
     X = ip(fp=fp, fname=fname, img=X )  # Set X as an image_processing class
-    print(f"set PSF_Size {paramaters['PSF_Size']}\n Set Blurring Level {paramaters['NS_lvl']}\n Set Noise Level {paramaters['BS_lvl']}")
+    print(f"set PSF_Size {paramaters['PSF_Size']}\n Set Blurring Level {paramaters['BS_lvl']}\n Set Noise Level {paramaters['NS_lvl']}")
     
     # Setting properties of image X
     # Parameters are 
@@ -102,7 +103,7 @@ def set_small_image():
     }
 
     paramaters = { 
-        "PSF_Size": (15 , 15 ),
+        "PSF_Size": (3 , 3 ),
         "NS_lvl": 1.10, 
         "BS_lvl": 1.10
         } 
@@ -114,7 +115,7 @@ def set_small_image():
     # Loading desired image X as a Photo object.
     X = P.load(fp=fp, fname=fname)
     # Cropping Photo to explore reasonable sized matrices
-    ROI = f"{590 }:{ 690},{910 }:{1010}"
+    ROI = f"{0 }:{100},{0 }:{100}"
     print(ROI)
 
 
@@ -147,8 +148,8 @@ def slide_1(X):
     
     # size is set to 800 by 800
     d = 100
-    #queue = ip.sub_image(X.blur.image+ X.noise.image, d)
-    queue = ip.sub_image(X.blur.image, d)
+    queue = ip.sub_image(X.blur.image+ X.noise.image, d)
+    #queue = ip.sub_image(X.blur.image, d)
     
     
     paramaters = {
@@ -156,21 +157,48 @@ def slide_1(X):
         "ksize": X.kernel_size
         }
 
-
-    restored = []
+    lower_img_naive = []
+    upper_img_naive = []
+    lower_img_nlsq = []
+    upper_img_nlsq = []
     for img in queue:
         k = ip.blur_matrix(X.psf, img.shape )
         paramaters["Y"] = img
         paramaters["X_0"] = ip.first_approximation(img=img, psf=X.psf, clip=True)
-        paramaters["k"] = k
-        #partician = ip.restore(param=paramaters, nlsq=True) 
-        #restored.append( partician   )
-        restored.append( (np.linalg.inv(k)@img.reshape(img.size) ).reshape(img.shape) )
-    
-    
-    print(f"loaded...{np.asarray(restored).shape}" )
+        paramaters["K"] = k
+        LI , UI = ip.confidence_intervals(X, img, alpha=0.90, n=15, naive=True)
+        lower_img_naive.append(LI.reshape(img.shape))
+        upper_img_naive.append(UI.reshape(img.shape))
+        LI , UI = ip.confidence_intervals(X, img, alpha=0.90, n=15, nlsq=True)
+        lower_img_nlsq.append(LI.reshape(img.shape))
+        upper_img_nlsq.append(UI.reshape(img.shape))
 
-    X = ip.paste_image(restored, d)
+
+
+    print(f"loaded..." )
+    X_L = ip.paste_image(lower_img_naive, d)
+    X_U = ip.paste_image(upper_img_naive, d)
+    X_B =  0.5*(X_L + X_U)
+
+    X_L_nlsq = ip.paste_image(lower_img_naive, d)
+    X_U_nlsq = ip.paste_image(upper_img_naive, d)
+    X_B_nlsq =  0.5*(X_L_nlsq + X_U_nlsq)
+
+    data = {
+        "True Image" : np.transpose(X.image.reshape(X.image.size)),
+        "Naive_B" : np.transpose(X_B.reshape(X_B.size)),
+        "Naive_LB": np.transpose(X_L.reshape(X_L.size)),
+        "Naive_UB": np.transpose(X_U.reshape(X_U.size)),
+        "NLSQ_B" : np.transpose(X_B_nlsq.reshape(X_B_nlsq.size)),
+        "NLSQ_LB": np.transpose(X_L_nlsq.reshape(X_L_nlsq.size)),
+        "NLSQ_UB": np.transpose(X_U_nlsq.reshape(X_U_nlsq.size))
+    }
+
+    df = pd.DataFrame(data,
+        columns=[ "True Image", "Naive_B", "NLSQ_B", "Naive_LB", "Naive_UB", "NLSQ_B", "NLSQ_LB", "NLSQ_UB" ])
+
+    print(df.head)
+    print(df.describe())
 
 
     style='seaborn-talk'
@@ -182,8 +210,13 @@ def slide_1(X):
                 Particians: {int(np.sqrt(len(queue)))} {queue[0].shape} Images\n
                 Dimension: {X.shape}
                 """
+    t2 =f"""True B.L.U.E Image\n
+                Method: NLSQ\n
+                Particians: {int(np.sqrt(len(queue)))} {queue[0].shape} Images\n
+                Dimension: {X.shape}
+                """
 
-    ip.display(X ,
+    ip.display(X_B ,
         title=t1,
         manifold=True,
         animate=True,
@@ -192,10 +225,20 @@ def slide_1(X):
         figsize=(10, 10),
         style=style,
         color_map=color_map)
+    
+    ip.display(X_B_nlsq ,
+        title=t2,
+        manifold=True,
+        animate=True,
+        show=False,
+        fname="NLSQ Reconstruction of Image",
+        figsize=(10, 10),
+        style=style,
+        color_map=color_map)
 
 
-    ip.display(X ,
-        title=t1 ,
+    ip.display( X_B ,
+        title=t1,
         signals=True,
         animate=True,
         show=False,
@@ -203,6 +246,25 @@ def slide_1(X):
         figsize=(10, 10),
         style=style,
         color_map=color_map)
+
+    ip.display( X_B_nlsq ,
+        title=t2,
+        signals=True,
+        animate=True,
+        show=False,
+        fname="NLSQ Reconstruction as Signals",
+        figsize=(10, 10),
+        style=style,
+        color_map=color_map)
+    fname=f""
+    df = df.applymap(ip.clip)
+    df.plot(kind='kde',
+            title=f"Kernel Estimation Plot"
+            )
+
+    for col in df.columns():
+        df.plot(kind='kde', title=f"KDE of {col}")
+
 
     """
     Caption:
@@ -226,7 +288,7 @@ def slide_3(X,fname="Naive"):
 
     #X = set_small_image()
     X.show(title=f"Cat Cropped\nDimension: {X.shape}")
-    d = 100
+    d = 25
     queue = ip.sub_image(X.blur.image+ X.noise.image, d)
     paramaters = {
         "sigma_blur" : X.sigma_blur,
@@ -247,40 +309,48 @@ def slide_3(X,fname="Naive"):
 
     X_L = ip.paste_image(lower_img, d)
     X_U = ip.paste_image(upper_img, d)
-    X =  0.5*(X_L + X_U)
+    #X_L , X_U = 255*(X_L/np.max(X_L)) , 255*( X_U/np.max(X_U))
+    X_B =  0.5*(X_L + X_U)
+    #X_B = 255*X_B/np.max(X_B)
     
     P.show_array(X_L, title="lower bound")
-    P.show_array(X, title="BLUE")
+    P.show_array(X_B, title="BLUE")
     P.show_array(X_U, title="Upper bound")
 
-    ip.plot_confidence(X, X_L, X_U, kde=True, fname=fname)
+    df = ip.plot_confidence(X_B, X_L, X_U, X.image, kde=True, fname=fname)
+
+    print(df[["lower bound", "BLUE", "Upper bound"]].describe())
+
+    '''
 
     t1 =f"""True B.L.U.E Image\n
-                Method: Nonlinear least squares\n
+                Method: Naive\n
                 Particians: {int(np.sqrt(len(queue)))} {queue[0].shape} Images\n
                 Dimension: {X.shape}
                 """
 
-    ip.display(X ,
+    ip.display(X_B ,
         title=t1,
         manifold=True,
         animate=True,
         show=False,
-        fname="NLSQ Reconstruction of Image",
+        fname="Naive Reconstruction of Image",
         figsize=(10, 10),
         style=style,
         color_map=color_map)
 
 
-    ip.display(X ,
+    ip.display(X_B ,
         title=t1 ,
         signals=True,
         animate=True,
         show=False,
-        fname="NLSQ Reconstruction as Signals",
+        fname="Naive Reconstruction as Signals",
         figsize=(10, 10),
         style=style,
         color_map=color_map)
+
+    '''
 
 def slide_4(X, fname="nlsq"):
     """
@@ -292,7 +362,7 @@ def slide_4(X, fname="nlsq"):
 
     #X = set_small_image()
     X.show(title=f"Cat Cropped\nDimension: {X.shape}")
-    d = 100
+    d = 25
     queue = ip.sub_image(X.blur.image+ X.noise.image, d)
     paramaters = {
         "sigma_blur" : X.sigma_blur,
@@ -306,7 +376,7 @@ def slide_4(X, fname="nlsq"):
         paramaters["Y"] = img
         paramaters["X_0"] = ip.first_approximation(img=img, psf=X.psf, clip=True)
         paramaters["k"] = k
-        LI , UI = ip.confidence_intervals(X, img, alpha=0.90, n=31, nlsq=True)
+        LI , UI = ip.confidence_intervals(X, img, alpha=0.90, n=5, nlsq=True)
         lower_img.append(LI.reshape(img.shape))
         upper_img.append(UI.reshape(img.shape))
 
@@ -315,13 +385,46 @@ def slide_4(X, fname="nlsq"):
 
     X_L = ip.paste_image(lower_img, d)
     X_U = ip.paste_image(upper_img, d)
-    X =  0.5*(X_L + X_U)
+    #X_L , X_U = 255.0*(X_L/np.max(X_L)) , 255*( X_U/np.max(X_U))
+    X_B =  0.5*(X_L + X_U)
+    #X_B = 255.0*(X_B/np.max(X_B))
     
     P.show_array(X_L, title="lower bound")
-    P.show_array(X, title="BLUE")
+    P.show_array(X_B, title="BLUE")
     P.show_array(X_U, title="Upper bound")
 
-    ip.plot_confidence(X, X_L, X_U, kde=True, fname=fname)
+    df = ip.plot_confidence(X_B, X_L, X_U, X.image, kde=True, fname=fname)
+
+    '''
+
+    t1 =f"""True B.L.U.E Image\n
+                Method: Nonlinear least squares\n
+                Particians: {int(np.sqrt(len(queue)))} {queue[0].shape} Images\n
+                Dimension: {X.shape}
+                """
+    
+    ip.display(X_B ,
+        title=t1,
+        manifold=True,
+        animate=True,
+        show=False,
+        fname="NLSQ Reconstruction of Image",
+        figsize=(5, 5),
+        style=style,
+        color_map=color_map)
+
+
+    ip.display(X_B ,
+        title=t1 ,
+        signals=True,
+        animate=True,
+        show=False,
+        fname="NLSQ Reconstruction as Signals",
+        figsize=(5, 5),
+        style=style,
+        color_map=color_map)
+
+    '''
 
 def section_ci():
     """
@@ -336,41 +439,95 @@ def section_ci():
         """
         print(full_to_small.__doc__)
         X = set_image()
+
         t_0 = f"Original Image {X.shape} "
         P.show_array(X.image, title=t_0)
+        t_0 = f"Blur Kernel {X.psf.shape}"
+        k = X.psf
+        k = k*255/np.max(k)
+        P.show_array(k, t_0)
         t_1 = f"Blurred Image {X.shape}\nBlurr: {X.sigma_blur}%\nPSF shape: {X.psf.shape} "
         P.show_array(X.blur.image, t_1)
         t_2 = f"Blurred, Noisy Image {X.shape} \nBlurr:{X.sigma_blur}%\nPSF shape:{X.psf.shape}\nNoise: {X.sigma_noise}%"
         P.show_array(X.blur.image + X.noise.image, t_2)
+        
 
+        style='seaborn-talk'
+        color_map = 'viridis'
+        '''
+
+        t1 = f"Original Image"
+        ip.display(X.image ,
+            title=t1 ,
+            signals=True,
+            animate=True,
+            fname="Original_as_signal",
+            figsize=(5, 5),
+            style=style,
+            color_map=color_map)
+
+        k = ip.freq_kernel(X.psf, X.image)
+        t1 = f"PSF"
+        ip.display(k ,
+            title=t1 ,
+            signals=True,
+            animate=True,
+            fname="PSF",
+            figsize=(5, 5),
+            style=style,
+            color_map=color_map)     
+
+        t1 = f"Blurred Image"
+        ip.display(X.blur.image ,
+            title=t1 ,
+            signals=True,
+            animate=True,
+            fname="Blurred Image",
+            figsize=(5, 5),
+            style=style,
+            color_map=color_map)  
+
+        t1 = f"Blurred and Noisy Image"
+        ip.display(X.blur.image + X.noise.image ,
+            title=t1 ,
+            signals=True,
+            animate=True,
+            fname=t1,
+            figsize=(5, 5),
+            style=style,
+            color_map=color_map)  
+
+    '''
+
+        '''
         X = set_small_image()
         t_0 = f"Original Image {X.shape} "
         P.show_array(X.image, title=t_0)
+        t_0 = f"Blur Kernel {X.psf.shape}"
+        k = X.psf
+        k = k*255/np.max(k)
+        P.show_array(k, t_0)
         t_1 =f"Blurred Image {X.shape}\nBlurr:{X.sigma_blur}%\nPSF shape:{X.psf.shape} "
         P.show_array(X.blur.image, t_1)
         t_2 = f"Blurred, Noisy Image {X.shape} \nBlurr: {X.sigma_blur}%\nPSF shape: {X.psf.shape}\nNoise: {X.sigma_noise}%"
         P.show_array(X.blur.image + X.noise.image, t_2)
-
         pass
-
+        '''
 
     full_to_small()
-
-
-
     pass
 
 
 
 
 
-
 def main():
-    #X = set_image()
-    #slide_1(X)
+    X = set_image()
+    #X = set_small_image()
+    slide_1(X)
     #slide_3(X)
     #slide_4(X)
-    section_ci()
+    #section_ci()
 
 
 
@@ -379,5 +536,16 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
+
+
+
+
+
 
 
